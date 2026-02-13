@@ -6,7 +6,6 @@ Usage:
     streamlit run app.py
 """
 
-import io
 import os
 import re
 import logging
@@ -15,8 +14,6 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from minio import Minio
-from minio.error import S3Error
 from pymongo import MongoClient
 
 # Suppress noisy thread warnings from Streamlit cache
@@ -30,10 +27,9 @@ load_dotenv()
 MONGODB_URL = os.getenv(
     "MONGODB_URL", "mongodb://admin:admin123@localhost:27017/voicera?authSource=admin"
 )
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+MINIO_PUBLIC_URL = os.getenv(
+    "MINIO_PUBLIC_URL", "https://s3.voicera.foreverlearning.in"
+)
 
 # Page config
 st.set_page_config(page_title="Voicera Audio Browser", page_icon="🎙️", layout="wide")
@@ -48,66 +44,12 @@ def get_mongo_client():
     return MongoClient(MONGODB_URL)
 
 
-@st.cache_resource
-def get_minio_client():
-    """Create a cached MinIO client."""
-    return Minio(
-        MINIO_ENDPOINT,
-        access_key=MINIO_ACCESS_KEY,
-        secret_key=MINIO_SECRET_KEY,
-        secure=MINIO_SECURE,
-    )
-
-
-def parse_minio_url(url: str) -> tuple[str, str] | None:
-    """Parse minio://bucket/object_name into (bucket, object)."""
-    if not url or not url.startswith("minio://"):
-        return None
-    path = url.replace("minio://", "")
-    parts = path.split("/", 1)
-    if len(parts) != 2:
-        return None
-    return parts[0], parts[1]
-
-
-def get_audio_bytes(recording_url: str) -> bytes | None:
-    """Download audio bytes from MinIO given a minio:// URL."""
-    parsed = parse_minio_url(recording_url)
-    if not parsed:
-        return None
-
-    bucket, obj = parsed
-    try:
-        client = get_minio_client()
-        response = client.get_object(bucket, obj)
-        data = response.read()
-        response.close()
-        response.release_conn()
-        return data
-    except S3Error:
-        return None
-    except Exception:
-        return None
-
-
-def get_transcript_text(transcript_url: str) -> str | None:
-    """Download transcript text from MinIO given a minio:// URL."""
-    parsed = parse_minio_url(transcript_url)
-    if not parsed:
-        return None
-
-    bucket, obj = parsed
-    try:
-        client = get_minio_client()
-        response = client.get_object(bucket, obj)
-        data = response.read().decode("utf-8")
-        response.close()
-        response.release_conn()
-        return data
-    except S3Error:
-        return None
-    except Exception:
-        return None
+def minio_to_public_url(minio_url: str) -> str:
+    """Convert minio://bucket/object to a public HTTPS URL."""
+    if not minio_url or not minio_url.startswith("minio://"):
+        return ""
+    path = minio_url.replace("minio://", "")
+    return f"{MINIO_PUBLIC_URL}/{path}"
 
 
 # ── Transcript parsing ───────────────────────────────────────────────────────
@@ -348,38 +290,7 @@ else:
     )
     display_df["duration_fmt"] = display_df["duration"].apply(format_duration)
     display_df["date"] = display_df["created_at"].apply(format_datetime)
-    display_df["has_audio"] = (
-        display_df["recording_url"]
-        .str.startswith("minio://", na=False)
-        .map({True: "✅", False: "—"})
-    )
-    display_df["has_transcript"] = (
-        display_df["transcript_content"].fillna("").str.len() > 0
-    ).map({True: "✅", False: "—"})
-
-    # Table columns
-    table_cols = [
-        "date",
-        "agent_type",
-        "direction",
-        "from_number",
-        "to_number",
-        "duration_fmt",
-        "has_audio",
-        "has_transcript",
-    ]
-    table_names = {
-        "date": "Date",
-        "agent_type": "Agent",
-        "direction": "Direction",
-        "from_number": "From",
-        "to_number": "To",
-        "duration_fmt": "Duration",
-        "has_audio": "Audio",
-        "has_transcript": "Transcript",
-    }
-
-    # Add transcript column for display
+    display_df["audio_url"] = filtered_df["recording_url"].apply(minio_to_public_url)
     display_df["transcript"] = filtered_df["transcript_content"].fillna(
         "No transcript available"
     )
@@ -392,7 +303,7 @@ else:
         "from_number",
         "to_number",
         "duration_fmt",
-        "has_audio",
+        "audio_url",
         "transcript",
     ]
     table_names = {
@@ -402,11 +313,15 @@ else:
         "from_number": "From",
         "to_number": "To",
         "duration_fmt": "Duration",
-        "has_audio": "Audio",
+        "audio_url": "Audio URL",
         "transcript": "Transcript",
     }
 
     column_config = {
+        "Audio URL": st.column_config.LinkColumn(
+            "Audio URL",
+            display_text="🔗 Download",
+        ),
         "Transcript": st.column_config.TextColumn(
             "Transcript",
             width="large",
@@ -449,16 +364,14 @@ else:
         )
 
     with col2:
-        # Export meeting IDs with recording URLs
-        recordings = filtered_df[
-            filtered_df["recording_url"].str.startswith("minio://", na=False)
-        ]
-        if not recordings.empty:
-            id_list = "\n".join(recordings["meeting_id"].tolist())
+        # Export public audio URLs
+        audio_urls = display_df["audio_url"][display_df["audio_url"] != ""].tolist()
+        if audio_urls:
+            urls_text = "\n".join(audio_urls)
             st.download_button(
-                label="📄 Download Meeting ID List",
-                data=id_list,
-                file_name="meeting_ids.txt",
+                label="📄 Download Audio URL List",
+                data=urls_text,
+                file_name="audio_urls.txt",
                 mime="text/plain",
             )
         else:
