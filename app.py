@@ -174,7 +174,7 @@ def parse_transcript(transcript_content: str) -> list[dict]:
 
 def format_duration(seconds: float | None) -> str:
     """Format seconds into human-readable duration."""
-    if not seconds or seconds <= 0:
+    if seconds is None or pd.isna(seconds) or seconds <= 0:
         return "—"
     total = int(seconds)
     if total < 60:
@@ -379,140 +379,47 @@ else:
         "has_transcript": "Transcript",
     }
 
+    # Add transcript column for display
+    display_df["transcript"] = filtered_df["transcript_content"].fillna(
+        "No transcript available"
+    )
+
+    # Table columns
+    table_cols = [
+        "date",
+        "agent_type",
+        "direction",
+        "from_number",
+        "to_number",
+        "duration_fmt",
+        "has_audio",
+        "transcript",
+    ]
+    table_names = {
+        "date": "Date",
+        "agent_type": "Agent",
+        "direction": "Direction",
+        "from_number": "From",
+        "to_number": "To",
+        "duration_fmt": "Duration",
+        "has_audio": "Audio",
+        "transcript": "Transcript",
+    }
+
+    column_config = {
+        "Transcript": st.column_config.TextColumn(
+            "Transcript",
+            width="large",
+            help="Full conversation transcript",
+        ),
+    }
+
     st.dataframe(
         display_df[table_cols].rename(columns=table_names),
+        column_config=column_config,
         hide_index=True,
         use_container_width=True,
     )
-
-    # ── Expandable detail rows ───────────────────────────────────────────────
-
-    st.markdown("---")
-    st.subheader("📋 Call Details")
-
-    for idx, row in filtered_df.iterrows():
-        meeting_id = row["meeting_id"]
-        label = (
-            f"{format_datetime(row['created_at'])} — "
-            f"{row['from_number']} → {row['to_number']} — "
-            f"{format_duration(row['duration'])}"
-        )
-
-        with st.expander(label, expanded=False):
-            # Metadata
-            meta_col1, meta_col2, meta_col3 = st.columns(3)
-            with meta_col1:
-                st.markdown(f"**Meeting ID:** `{meeting_id}`")
-                st.markdown(f"**Agent:** {row['agent_type']}")
-            with meta_col2:
-                st.markdown(f"**From:** {row['from_number']}")
-                st.markdown(f"**To:** {row['to_number']}")
-            with meta_col3:
-                direction = "Inbound" if row.get("inbound") else "Outbound"
-                st.markdown(f"**Direction:** {direction}")
-                st.markdown(f"**Duration:** {format_duration(row['duration'])}")
-
-            st.markdown("---")
-
-            # Audio player
-            recording_url = row.get("recording_url", "")
-            if recording_url and recording_url.startswith("minio://"):
-                st.markdown("**🔊 Recording**")
-                audio_data = get_audio_bytes(recording_url)
-                if audio_data:
-                    # Determine format from URL
-                    audio_format = "audio/wav"
-                    if recording_url.endswith(".mp3"):
-                        audio_format = "audio/mpeg"
-                    elif recording_url.endswith(".m4a"):
-                        audio_format = "audio/mp4"
-
-                    st.audio(audio_data, format=audio_format)
-
-                    # Download button
-                    ext = (
-                        recording_url.rsplit(".", 1)[-1]
-                        if "." in recording_url
-                        else "wav"
-                    )
-                    st.download_button(
-                        label="⬇️ Download Audio",
-                        data=audio_data,
-                        file_name=f"{meeting_id}.{ext}",
-                        mime=audio_format,
-                        key=f"audio_{meeting_id}",
-                    )
-                else:
-                    st.warning("Could not load audio from storage.")
-            else:
-                st.info("No recording available for this call.")
-
-            st.markdown("---")
-
-            # Transcript
-            transcript_content = row.get("transcript_content", "")
-            if transcript_content:
-                st.markdown("**💬 Transcript**")
-                messages = parse_transcript(transcript_content)
-
-                if messages:
-                    for msg in messages:
-                        role = msg["role"]
-                        content = msg["content"]
-                        timestamp = msg.get("timestamp", "")
-
-                        if role == "user":
-                            prefix = "🧑 **User**"
-                        else:
-                            prefix = "🤖 **Agent**"
-
-                        ts_display = f" `{timestamp}`" if timestamp else ""
-                        st.markdown(f"{prefix}{ts_display}: {content}")
-                else:
-                    # Fallback: show raw text
-                    st.text(transcript_content)
-
-                # Download transcript
-                st.download_button(
-                    label="⬇️ Download Transcript",
-                    data=transcript_content,
-                    file_name=f"{meeting_id}_transcript.txt",
-                    mime="text/plain",
-                    key=f"transcript_{meeting_id}",
-                )
-            else:
-                # Try fetching from MinIO if transcript_url exists
-                transcript_url = row.get("transcript_url", "")
-                if transcript_url and transcript_url.startswith("minio://"):
-                    st.markdown("**💬 Transcript**")
-                    text = get_transcript_text(transcript_url)
-                    if text:
-                        messages = parse_transcript(text)
-                        if messages:
-                            for msg in messages:
-                                role = msg["role"]
-                                content = msg["content"]
-                                timestamp = msg.get("timestamp", "")
-                                if role == "user":
-                                    prefix = "🧑 **User**"
-                                else:
-                                    prefix = "🤖 **Agent**"
-                                ts_display = f" `{timestamp}`" if timestamp else ""
-                                st.markdown(f"{prefix}{ts_display}: {content}")
-                        else:
-                            st.text(text)
-
-                        st.download_button(
-                            label="⬇️ Download Transcript",
-                            data=text,
-                            file_name=f"{meeting_id}_transcript.txt",
-                            mime="text/plain",
-                            key=f"transcript_minio_{meeting_id}",
-                        )
-                    else:
-                        st.info("Could not load transcript from storage.")
-                else:
-                    st.info("No transcript available for this call.")
 
     # ── Bulk download ────────────────────────────────────────────────────────
 
