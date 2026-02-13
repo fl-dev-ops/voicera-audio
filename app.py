@@ -254,10 +254,9 @@ st.sidebar.markdown(f"**Filtered Records:** {len(filtered_df)}")
 
 st.markdown("---")
 
-total_calls = len(filtered_df)
 total_duration_seconds = filtered_df["duration"].fillna(0).sum()
 has_recording = filtered_df["recording_url"].str.startswith("minio://", na=False).sum()
-has_transcript = (filtered_df["transcript_content"].fillna("").str.len() > 0).sum()
+unique_agents = filtered_df["agent_type"].nunique()
 
 total_hours = int(total_duration_seconds // 3600)
 total_minutes = int((total_duration_seconds % 3600) // 60)
@@ -266,15 +265,17 @@ if total_hours > 0:
 else:
     duration_display = f"{total_minutes}m"
 
+unique_callers = filtered_df["from_number"].nunique()
+
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Total Calls", f"{total_calls:,}")
+    st.metric("Total Session Time", duration_display)
 with col2:
-    st.metric("Total Talk Time", duration_display)
+    st.metric("Downloadable Audio", f"{has_recording:,}")
 with col3:
-    st.metric("With Recording", f"{has_recording:,}")
+    st.metric("Users", f"{unique_callers:,}")
 with col4:
-    st.metric("With Transcript", f"{has_transcript:,}")
+    st.metric("Agents", f"{unique_agents:,}")
 
 st.markdown("---")
 
